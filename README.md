@@ -56,7 +56,7 @@ Health: `GET /healthz` (liveness), `GET /readyz` (readiness, includes a database
 round-trip).
 
 ```bash
-npm test          # 124 tests; the PostgreSQL suites skip if no database
+npm test          # the PostgreSQL suites skip themselves if no database is reachable
 npm run lint
 ```
 
@@ -144,24 +144,30 @@ node scripts/mint-token.mjs --secret "$NOTES_JWT_SECRET" --doc automerge:3Ux1s9�
 
 ### `documentBinding`: which rooms a connection may enter
 
+This setting only decides what happens to a document **no grant covers and no
+[authorization endpoint](#authorization) was asked about**. Rooms named by the
+token are always allowed; with `authz: "webhook"` configured, everything else is
+referred to the app either way.
+
 **`open`** (default) — an authenticated peer may sync any document it can name,
 within its own app. Document ids are unguessable 128-bit values revealed only
 through a share link, so knowing one is the capability. This matches how share
 links already work.
 
-**`strict`** — a connection may only sync the documents its token (or the
-authorization webhook) names. Stronger, but the issuing app must list _every_
-room the session needs.
+**`strict`** — a connection may only sync the documents its token names.
 
-That last point is not optional, and it is the reason `open` is the default. An
-Automerge client multiplexes all of its documents over a single connection to a
-given server: `NetworkSubsystem` keys peers by peer id, and the first adapter to
-see a peer id handles every subsequent message to it. A second socket to the same
-server is therefore never used for sending. Under `strict`, a token naming one
-room will break every other room the client has open.
+Strict requires the issuing app to list _every_ room the session needs, and that
+is not optional — it is why `open` is the default. An Automerge client
+multiplexes all of its documents over a single connection to a given server:
+`NetworkSubsystem` keys peers by peer id, and the first adapter to see a peer id
+handles every subsequent message to it, so a second socket to the same server is
+never used for sending. Under `strict`, a token naming one room breaks every other
+room the client has open.
 
-Use `strict` when your app can enumerate a session's rooms at token-mint time (or
-answer with them from the webhook). Use `open` otherwise.
+Pairing `open` with an authorization endpoint is usually the better choice: each
+room is still checked, but the app answers per document as it comes up instead of
+having to enumerate them in advance. Reach for `strict` when you want rooms fixed
+for the life of a connection, or when you have no endpoint to ask.
 
 ---
 
@@ -393,10 +399,11 @@ src/
   tenant.mjs             per-app Repo + WebSocketServer, access gate, eviction
   admin.mjs              authenticated revoke + stats endpoints
   auth/
-    index.mjs            connection authentication, room grants
+    index.mjs            connection authentication, per-room authorization + cache
     jwt.mjs              HS256 verification (alg-checked, constant-time)
     webhook.mjs          the per-app authorization callback
   storage/
+    index.mjs            adapter factory (postgres, or memory for development)
     postgres.mjs         tenant-scoped Automerge storage adapter
   documentId.mjs         document id normalization
   db.mjs                 shared connection pool
@@ -412,6 +419,10 @@ in-process on an ephemeral port by the tests, with no environment mutation.
 
 - Authentication is required by default; `requireAuth: false` logs a loud warning
   and should only ever be used on a trusted network.
+- Access is checked per document, not per connection, when an app configures an
+  authorization endpoint. One socket can name any number of documents, so a
+  connection-only check would let a peer removed from one room reach it over a
+  socket opened legitimately for another.
 - Documents are served only on explicit request. The service configures
   automerge-repo with `shareConfig.announce` set to `false` and
   `shareConfig.access` bound to the requesting connection's grants, so it never

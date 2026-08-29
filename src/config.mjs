@@ -169,6 +169,7 @@ function singleAppFromEnv(env) {
     webhookSecret: env.CRDT_WEBHOOK_SECRET,
     webhookTimeoutMs: env.CRDT_WEBHOOK_TIMEOUT_MS,
     webhookFailOpen: env.CRDT_WEBHOOK_FAIL_OPEN,
+    webhookCacheTtlMs: env.CRDT_WEBHOOK_CACHE_TTL_MS,
     storage: env.CRDT_APP_STORAGE,
   }
 }
