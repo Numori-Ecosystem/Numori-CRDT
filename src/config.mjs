@@ -29,8 +29,8 @@
  *   CRDT_APPS_FILE=/etc/numori/apps.json
  *
  * For a single-app deployment you can skip the registry entirely and use the
- * flat form (CRDT_APP_ID + JWT_SECRET + CRDT_*), which keeps the migration
- * from the old single-tenant collab-server to one env var rename.
+ * flat form (CRDT_APP_ID + JWT_SECRET + CRDT_*), which keeps the configuration
+ * of a one-app service down to a couple of variables.
  *
  * Secrets should be referenced indirectly with `secretEnv` so the registry
  * itself (which may be baked into an image or a ConfigMap) holds no key
@@ -151,8 +151,8 @@ function parseAppsJson(raw, origin) {
 }
 
 /**
- * Build the flat single-app declaration used when no registry is provided.
- * This is the shape a straight port of the old collab-server needs.
+ * Build the flat single-app declaration used when no registry is provided, so a
+ * one-app deployment needs only CRDT_APP_ID and a signing key.
  */
 function singleAppFromEnv(env) {
   return {
@@ -417,9 +417,10 @@ export function loadConfig(env = process.env) {
     )
   }
 
-  // A single-app deployment gets an implicit default so clients can connect to
-  // any path (including the legacy "/collab"). With several apps the path must
-  // name one, unless an explicit default is chosen.
+  // A single-app deployment gets an implicit default, so a client may connect to
+  // any path — including one like "/collab" that names no app — and still be
+  // routed correctly. With several apps the path must name one, unless an
+  // explicit default is chosen.
   const explicitDefault = env.CRDT_DEFAULT_APP?.trim() || null
   if (explicitDefault && !seen.has(explicitDefault)) {
     throw new ConfigError(

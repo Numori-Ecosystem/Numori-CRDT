@@ -9,13 +9,12 @@
  * a collaborator, deletes a share or makes a document private, the peers already
  * connected must be disconnected now rather than at token expiry.
  *
- * The previous single-tenant server did this by sharing a Postgres database with
- * the app and listening on a NOTIFY channel. That works, but it requires every
- * app to live in the same database as the sync service — an unreasonable
- * coupling once several unrelated apps are hosted. An authenticated HTTP call
- * has no such requirement, so it is the primary mechanism here. (The Postgres
- * listener is still available per app for apps that already share a database;
- * see src/revocation/postgres.mjs.)
+ * An authenticated HTTP call is the primary mechanism because it works wherever
+ * the app is hosted. Signalling through a shared Postgres NOTIFY channel is also
+ * supported (see src/revocation/postgres.mjs) and has the advantage of being
+ * transactional with the change that triggered it — but it requires the app to
+ * live in the same database as this service, which cannot be assumed once
+ * several unrelated apps are hosted.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * ENDPOINTS

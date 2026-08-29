@@ -148,7 +148,7 @@ describe('app registry validation', () => {
 })
 
 describe('default app resolution', () => {
-  it('makes a lone app the implicit default so legacy paths keep working', () => {
+  it('makes a lone app the implicit default so any path routes to it', () => {
     const config = loadConfig({ CRDT_APPS: JSON.stringify([{ id: 'notes', secret: SECRET }]) })
     expect(config.defaultAppId).toBe('notes')
   })

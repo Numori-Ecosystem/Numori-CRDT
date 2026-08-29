@@ -7,14 +7,14 @@
  *
  * A capability token proves the owning app *once* issued permission. It cannot
  * express what changed since: a share revoked, a collaborator removed, a link
- * expired, a document deleted. The old single-tenant server solved this by
- * querying the notes app's own tables (`shared_notes`, `share_members`) — which
- * hard-wired one product's schema into the sync service and made a second app
- * impossible without forking it.
+ * expired, a document deleted. Checking that live state means consulting the app.
  *
- * Instead, each app may nominate an HTTP endpoint that answers one question:
- * "may this identity join this room right now?". The app keeps its schema
- * private, this service stays generic, and the live-state check is preserved.
+ * Reading the app's own tables from here would be the direct route, and the wrong
+ * one: it hard-wires one product's schema into a service meant to host many, so
+ * every new app would need code changes here. Instead each app may nominate an
+ * HTTP endpoint answering one question — "may this identity join this room right
+ * now?" — which keeps the app's schema private and this service generic while
+ * preserving the live-state check.
  *
  * Requests are HMAC-signed over `timestamp.body` so the app can verify the
  * caller is really this service and reject replays. The signature scheme

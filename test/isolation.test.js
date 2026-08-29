@@ -154,12 +154,12 @@ describe('default app fallback', () => {
     await svc.stop()
   })
 
-  it('serves a legacy path through the default app', async () => {
+  it('serves a path that names no app through the default app', async () => {
     const token = mintToken({ secret: TEST_SECRET })
     const { repo } = clients.connect(svc.ws(`/collab?token=${token}`))
-    const handle = repo.create({ text: 'legacy path' })
+    const handle = repo.create({ text: 'unmatched path' })
     expect(
-      await waitFor(() => servedText(svc.tenant('notes'), handle.documentId) === 'legacy path'),
+      await waitFor(() => servedText(svc.tenant('notes'), handle.documentId) === 'unmatched path'),
     ).toBe(true)
   })
 

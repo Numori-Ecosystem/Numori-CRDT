@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 /**
- * Copy documents from the legacy single-tenant `collab_chunks` table into the
- * multi-tenant `crdt_chunks` table, assigning them to one app.
+ * Import Automerge chunks from a single-tenant table into the multi-tenant chunk
+ * table, assigning them to one app.
  *
- * The legacy schema had no notion of a tenant:
- *   collab_chunks (key TEXT[] PRIMARY KEY, data BYTEA)
- * The new one namespaces every row:
+ * A single-tenant source is keyed by StorageKey alone:
+ *   <source>      (key TEXT[] PRIMARY KEY, data BYTEA)
+ * This service namespaces every row by app:
  *   crdt_chunks   (app_id TEXT, key TEXT[], data BYTEA, PRIMARY KEY (app_id, key))
  *
  * The copy is additive and idempotent — existing rows are left alone — so it is
- * safe to run more than once, and the legacy table is never modified. Keep it
- * until you have confirmed the new service serves your documents, then drop it
+ * safe to run more than once, and the source table is never written to. Keep the
+ * source until you have confirmed this service serves the documents, then drop it
  * yourself.
  *
  * Usage:
- *   node scripts/migrate-from-collab-server.mjs --app notes [options]
+ *   node scripts/import-documents.mjs --app notes [options]
  *
  * Options:
- *   --app <id>        (required) app id to assign the migrated documents to
+ *   --app <id>        (required) app id to assign the imported documents to
  *   --from <table>    source table (default: collab_chunks)
  *   --to <table>      destination table (default: crdt_chunks, or CRDT_CHUNK_TABLE)
  *   --overwrite       replace rows that already exist for this app
@@ -54,11 +54,11 @@ function parseArgs(argv) {
 function usage() {
   process.stderr.write(
     [
-      'Copy legacy collab_chunks rows into the multi-tenant crdt_chunks table.',
+      'Import Automerge chunks from a single-tenant table into crdt_chunks.',
       '',
-      'Usage: node scripts/migrate-from-collab-server.mjs --app <id> [options]',
+      'Usage: node scripts/import-documents.mjs --app <id> [options]',
       '',
-      '  --app <id>      app id to assign migrated documents to (required)',
+      '  --app <id>      app id to assign imported documents to (required)',
       '  --from <table>  source table (default: collab_chunks)',
       '  --to <table>    destination table (default: crdt_chunks)',
       '  --overwrite     replace rows already present for this app',
@@ -102,7 +102,7 @@ async function main() {
   initDb(dbConfig)
 
   if (!(await tableExists(args.from))) {
-    throw new Error(`Source table "${args.from}" does not exist — nothing to migrate.`)
+    throw new Error(`Source table "${args.from}" does not exist — nothing to import.`)
   }
   await ensureSchema(args.to)
 
@@ -134,7 +134,7 @@ async function main() {
 
   // A single INSERT … SELECT keeps the copy atomic: either the app's documents
   // are all present or the table is untouched, so a failed run cannot leave a
-  // half-migrated document that would fail to load.
+  // half-imported document that would fail to load.
   const conflict = args.overwrite
     ? 'ON CONFLICT (app_id, key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()'
     : 'ON CONFLICT (app_id, key) DO NOTHING'
@@ -152,7 +152,7 @@ async function main() {
 
   process.stderr.write(
     `Copied ${result.rowCount} chunk(s). App "${args.app}" now has ${after.rows[0].chunks} chunks in "${args.to}".\n` +
-      `The legacy table "${args.from}" was not modified — drop it once you have verified the new service.\n` +
+      `The source table "${args.from}" was not modified — drop it once you have verified this service.\n` +
       `Point clients at ws(s)://<host>/${args.app}\n`,
   )
 }
@@ -160,7 +160,7 @@ async function main() {
 main()
   .then(() => closeDb())
   .catch(async (err) => {
-    process.stderr.write(`\nMigration failed: ${err.message}\n`)
+    process.stderr.write(`\nImport failed: ${err.message}\n`)
     await closeDb().catch(() => {})
     process.exit(1)
   })

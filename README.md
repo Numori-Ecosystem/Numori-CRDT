@@ -4,8 +4,8 @@ A multi-tenant [Automerge](https://automerge.org) sync service. One deployment
 serves many applications — a notes app, a todo app, anything that wants CRDT
 collaboration — with each application isolated from the others.
 
-Extracted from the `collab-server/` directory of Numori Notes so the sync
-workload is deployed and scaled on its own, and so a second app does not mean a
+It runs as its own deployment, so the realtime workload scales independently of
+any application's REST API, and adding a second app does not mean running a
 second sync server.
 
 ---
@@ -17,11 +17,11 @@ deltas and stores opaque binary chunks keyed by an unguessable document id; it
 never inspects, parses or understands what a document contains. Nothing about
 "a note" or "a todo item" appears anywhere in this codebase.
 
-What _was_ app-specific in the original server was authorization — it queried the
-notes app's own `shared_notes` and `share_members` tables directly. That is
-replaced here by two generic mechanisms: capability tokens each app signs with
-its own key, and an optional [authorization webhook](#authorization) each app can
-expose. Your app keeps its schema private; this service stays generic.
+The one thing a sync service genuinely needs to know per application is _who may
+enter which room_, and that is expressed generically: capability tokens each app
+signs with its own key, plus an optional [authorization webhook](#authorization)
+each app can expose for live checks. Your app keeps its schema private; this
+service never reads your tables.
 
 ### What isolation actually means here
 
@@ -357,50 +357,23 @@ Bounded by `CRDT_SHUTDOWN_GRACE_MS` (default 10s).
 
 ---
 
-## Migrating from `collab-server`
+## Importing documents from another table
 
-The legacy `collab_chunks` table had no tenant column. Copy its rows into
-`crdt_chunks` under an app id:
+To adopt Automerge chunks that live in a single-tenant table — one keyed only by
+`key`, with no `app_id` column — copy them into `crdt_chunks` under an app id:
 
 ```bash
-# Inspect first — changes nothing.
-node scripts/migrate-from-collab-server.mjs --app notes --dry-run
+# Report what would be copied and change nothing.
+node scripts/import-documents.mjs --app notes --from collab_chunks --dry-run
 
-node scripts/migrate-from-collab-server.mjs --app notes
+node scripts/import-documents.mjs --app notes --from collab_chunks
 ```
 
-Additive, idempotent, and it never modifies the source table. Drop
-`collab_chunks` yourself once the new service is confirmed working.
-
-Then, on the client, point the sync URL at this service:
-
-```diff
-- NUXT_PUBLIC_COLLAB_WS_URL=wss://notes.example.com/collab
-+ NUXT_PUBLIC_COLLAB_WS_URL=wss://crdt.example.com/notes
-```
-
-Configure the app with the same `JWT_SECRET` the notes API signs with and the
-existing tokens verify unchanged — the token contract (`purpose: "collab"`,
-`documentId`, `userId`, `sid`, `kind`) is the same. To keep the existing
-`pg_notify('collab_revoke', …)` revocation path, set
-`"revokeChannel": "collab_revoke"` on the app and give it access to the same
-database.
-
-Two changes are worth making rather than deferring:
-
-1. **Replace the database authorization with the webhook.** The old server read
-   `shared_notes`/`share_members` directly. Expose that same check as an
-   authorization endpoint and set `authz: "webhook"`; the sync service then needs
-   no access to your application tables at all.
-2. **The `announce` fix is a security fix.** The old server passed
-   `sharePolicy: () => true`. In automerge-repo 2.x that legacy option sets only
-   `shareConfig.announce`, while `shareConfig.access` separately defaults to
-   allow-all, and `CollectionSynchronizer` shares a document when
-   `announce || (access && hasRequested)`. The result is that the server
-   _actively pushes every document in its memory to every connected peer_,
-   regardless of what they requested or hold a capability for. This service sets
-   `announce: false` with a real `access` gate; `test/access-control.test.js`
-   guards against a regression.
+`--from` defaults to `collab_chunks` and `--to` to `crdt_chunks`. The copy is
+additive, idempotent and never writes to the source table, so it is safe to run
+more than once and safe to leave the source in place until you have confirmed the
+service serves those documents. Add `--overwrite` to replace rows that already
+exist for the app.
 
 ---
 
@@ -436,6 +409,15 @@ in-process on an ephemeral port by the tests, with no environment mutation.
 
 - Authentication is required by default; `requireAuth: false` logs a loud warning
   and should only ever be used on a trusted network.
+- Documents are served only on explicit request. The service configures
+  automerge-repo with `shareConfig.announce` set to `false` and
+  `shareConfig.access` bound to the requesting connection's grants, so it never
+  volunteers a document to a peer. **If you modify this, do not reach for the
+  `sharePolicy` option**: it sets only `announce` and silently leaves `access` at
+  allow-all, and `CollectionSynchronizer` shares a document when
+  `announce || (access && hasRequested)` — so a permissive `sharePolicy` makes the
+  server push every document in its memory to every connected peer, whatever they
+  asked for or hold a capability for. `test/access-control.test.js` guards this.
 - Signing keys must be at least 16 characters and are validated at startup.
 - The `alg` header is checked against HS256, so an `alg: "none"` token is refused
   rather than trusted.
