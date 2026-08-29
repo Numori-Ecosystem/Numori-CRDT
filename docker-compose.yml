@@ -1,0 +1,65 @@
+# Numori CRDT — one sync service hosting several apps.
+#
+# The `crdt` service is the only thing you deploy; each application registers
+# itself in CRDT_APPS and connects to ws(s)://<host>/<appId>.
+#
+# Copy .env.example to .env and set the signing keys before starting.
+services:
+  crdt:
+    build: .
+    container_name: numori-crdt
+    restart: unless-stopped
+    ports:
+      - '${CRDT_PORT:-3030}:3030'
+    environment:
+      CRDT_PORT: 3030
+      CRDT_HOST: 0.0.0.0
+      CRDT_LOG_LEVEL: ${CRDT_LOG_LEVEL:-info}
+      CRDT_STORAGE: postgres
+
+      POSTGRES_USER: ${POSTGRES_USER:-crdt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crdt}
+      POSTGRES_DB: ${POSTGRES_DB:-crdt}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+
+      # The app registry. Each app has its own signing key, referenced
+      # indirectly through secretEnv so no key material lives in this file.
+      #
+      # `revokeChannel` is optional and only useful when the app shares this
+      # database; otherwise use the admin API to revoke access.
+      CRDT_APPS: >-
+        [
+          {"id":"notes","secretEnv":"NOTES_JWT_SECRET","documentBinding":"open"},
+          {"id":"todo","secretEnv":"TODO_JWT_SECRET","documentBinding":"open"}
+        ]
+      NOTES_JWT_SECRET: ${NOTES_JWT_SECRET:?set NOTES_JWT_SECRET in .env}
+      TODO_JWT_SECRET: ${TODO_JWT_SECRET:?set TODO_JWT_SECRET in .env}
+
+      # Enables POST /_admin/apps/:appId/revoke. Leave unset to disable the
+      # admin API entirely.
+      CRDT_ADMIN_SECRET: ${CRDT_ADMIN_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: numori-crdt-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crdt}
+      POSTGRES_USER: ${POSTGRES_USER:-crdt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crdt}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-crdt} -d ${POSTGRES_DB:-crdt}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local

@@ -1,0 +1,60 @@
+{
+  "name": "numori-crdt",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Multi-tenant Automerge CRDT sync service. One deployment serves many apps, each isolated by app id with its own signing key, storage namespace and authorization policy.",
+  "main": "src/index.mjs",
+  "author": {
+    "name": "Erik Bjerke",
+    "email": "contact@erikbjerke.com",
+    "url": "https://erikbjerke.com"
+  },
+  "contributors": [
+    {
+      "name": "TheProcedural Software Ltd",
+      "email": "contact@theprocedural.com",
+      "url": "https://theprocedural.com"
+    }
+  ],
+  "license": "AGPL-3.0",
+  "keywords": [
+    "automerge",
+    "crdt",
+    "sync-server",
+    "websocket",
+    "collaboration",
+    "multi-tenant"
+  ],
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "dev": "CRDT_LOG_LEVEL=debug node --watch src/index.mjs",
+    "dev:db": "docker compose -f docker-compose.dev.yml up -d",
+    "dev:db:stop": "docker compose -f docker-compose.dev.yml down",
+    "migrate:from-collab-server": "node scripts/migrate-from-collab-server.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@automerge/automerge": "^3.4.0",
+    "@automerge/automerge-repo": "^2.5.6",
+    "@automerge/automerge-repo-network-websocket": "^2.5.6",
+    "pg": "^8.22.0",
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.5.0",
+    "prettier": "^3.9.6",
+    "vitest": "^4.1.10"
+  }
+}

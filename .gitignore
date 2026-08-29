@@ -1,0 +1,27 @@
+# Node dependencies
+node_modules
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Test / coverage output
+coverage
+.vitest
+
+# Local env files
+.env
+.env.*
+!.env.example
+
+# Local app registry (contains signing secrets)
+apps.json
+apps.local.json
+
+# Misc
+.DS_Store
+.idea
+.fleet
+.vscode/*
+!.vscode/extensions.json

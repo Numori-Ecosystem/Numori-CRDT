@@ -1,0 +1,30 @@
+# Throwaway PostgreSQL for local development and the storage test suite.
+#
+# Uses port 5434 on the host so it cannot collide with the numori-notes dev
+# database (5432) or its test database (5433).
+#
+#   npm run dev:db        start
+#   npm run dev:db:stop   stop and remove
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: numori-crdt-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crdt}
+      POSTGRES_USER: ${POSTGRES_USER:-crdt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crdt}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - '5434:5432'
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-crdt} -d ${POSTGRES_DB:-crdt}']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_dev_data:
+    driver: local
