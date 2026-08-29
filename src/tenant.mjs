@@ -99,9 +99,10 @@ export function matchesRevocation(identity, criteria) {
  * @param {import('@automerge/automerge-repo').StorageAdapterInterface} [options.storage]
  * @param {(req: import('node:http').IncomingMessage, url: URL) => Promise<{ok: boolean, reason: string, identity?: object}>} options.authenticate
  * @param {number} [options.maxPayloadBytes]
+ * @param {number} [options.keepAliveMs] WebSocket ping interval
  * @returns {object} tenant handle
  */
-export function createTenant({ app, storage, authenticate, maxPayloadBytes }) {
+export function createTenant({ app, storage, authenticate, maxPayloadBytes, keepAliveMs = 5000 }) {
   const log = createLogger(app.id)
 
   // noServer: the shared HTTP listener in router.mjs performs the upgrade and
@@ -115,7 +116,10 @@ export function createTenant({ app, storage, authenticate, maxPayloadBytes }) {
     perMessageDeflate: false,
   })
 
-  const adapter = new WebSocketServerAdapter(wss)
+  // The adapter pings each socket on this interval and drops peers that stop
+  // answering. It also keeps otherwise-idle sockets alive through reverse proxies
+  // that close quiet connections.
+  const adapter = new WebSocketServerAdapter(wss, keepAliveMs)
 
   /**
    * Resolve the identity behind a peerId. The adapter records the socket for a

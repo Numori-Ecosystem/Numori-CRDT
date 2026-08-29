@@ -437,6 +437,13 @@ export function loadConfig(env = process.env) {
     port: parseCount(env.CRDT_PORT, 3030, { min: 0, max: 65535, label: 'CRDT_PORT' }),
     host: env.CRDT_HOST?.trim() || '0.0.0.0',
     logLevel: env.CRDT_LOG_LEVEL?.trim() || 'info',
+    /**
+     * Public origin clients reach this service on, used only to print the exact
+     * connect URL for each app at startup. Hosting platforms usually inject
+     * this — on Coolify, map it from the generated domain with
+     * CRDT_PUBLIC_URL=${SERVICE_FQDN_CRDT}.
+     */
+    publicUrl: env.CRDT_PUBLIC_URL?.trim() || null,
     storage: globalStorage,
     database,
     /** Table holding Automerge chunks for every app (namespaced by app_id). */
@@ -454,12 +461,44 @@ export function loadConfig(env = process.env) {
       max: 1024 * 1024 * 1024,
       label: 'CRDT_MAX_PAYLOAD_BYTES',
     }),
+    /**
+     * WebSocket ping interval. Collaboration sockets are long-lived and often
+     * idle, and reverse proxies close idle connections (Traefik defaults to 180s).
+     * Regular pings keep them open, so this must stay well below the shortest
+     * idle timeout on the path to the client.
+     */
+    keepAliveMs: parseCount(env.CRDT_KEEPALIVE_MS, 5000, {
+      min: 1000,
+      max: 120_000,
+      label: 'CRDT_KEEPALIVE_MS',
+    }),
     shutdownGraceMs: parseCount(env.CRDT_SHUTDOWN_GRACE_MS, 10_000, {
       min: 0,
       max: 120_000,
       label: 'CRDT_SHUTDOWN_GRACE_MS',
     }),
   })
+}
+
+/**
+ * Build the WebSocket URL clients should use for an app.
+ *
+ * Accepts a bare hostname (what most platforms inject), or an origin with a
+ * scheme, and normalizes to ws:// or wss://.
+ *
+ * @param {string|null} publicUrl
+ * @param {string} appId
+ * @returns {string|null}
+ */
+export function clientUrlFor(publicUrl, appId) {
+  if (!publicUrl) return null
+  let origin = publicUrl.trim().replace(/\/+$/, '')
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(origin)) {
+    // A bare host: assume TLS, since anything public should be behind it.
+    origin = `https://${origin}`
+  }
+  const scheme = origin.startsWith('https://') ? 'wss://' : 'ws://'
+  return `${scheme}${origin.replace(/^https?:\/\//, '')}/${appId}`
 }
 
 /** Human-readable, secret-free summary for startup logs and /healthz. */

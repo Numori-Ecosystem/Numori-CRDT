@@ -1,0 +1,132 @@
+# Numori CRDT — Coolify deployment.
+#
+# Use this file as the compose file for a Coolify "Docker Compose" resource
+# (Build Pack: Docker Compose). In that mode the compose file is the single source
+# of truth: environment variables, volumes and healthchecks must be declared here
+# rather than in the Coolify UI.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# HOW ROUTING WORKS HERE
+# ─────────────────────────────────────────────────────────────────────────────
+# `SERVICE_FQDN_CRDT_3030` is a Coolify magic variable. Listing it makes Coolify
+# generate a domain for this stack and tell its Traefik proxy to route that
+# domain to container port 3030 — while still serving the public side on 443.
+# The generated value is injected back into the container as SERVICE_FQDN_CRDT,
+# which the service logs on startup so you can confirm the URL clients should use.
+#
+# If you would rather set the domain yourself, delete that line and enter the
+# domain in the Coolify UI as `http://crdt.example.com:3030`. The `:3030` tells
+# Coolify which container port to forward to; it does not appear in the public URL.
+#
+# Note there is deliberately no `ports:` mapping. Publishing a host port would
+# bypass the proxy (and TLS) entirely.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WEBSOCKETS
+# ─────────────────────────────────────────────────────────────────────────────
+# Traefik proxies WebSocket upgrades on the same router as normal HTTP, so no
+# extra labels are needed. The two things that actually break realtime traffic on
+# a Traefik-fronted PaaS are:
+#
+#   1. The domain pointing at the wrong container port — traffic never arrives.
+#   2. An unhealthy container — Traefik drops it from the pool and every request
+#      fails with "No Available Server". Hence the healthcheck below probes
+#      /healthz (liveness) and not /readyz, so a brief database problem does not
+#      remove the service from routing while peers are mid-edit.
+#
+# Idle sockets are kept alive by the service's own pings (CRDT_KEEPALIVE_MS,
+# default 5s), comfortably inside Traefik's 180s idle timeout.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# SECRETS
+# ─────────────────────────────────────────────────────────────────────────────
+# Variables written as ${VAR:?} are marked *required* by Coolify: they appear at
+# the top of the UI's environment list with a red border and the deploy is
+# blocked until they are set. Generate each signing key with `openssl rand -hex 32`.
+#
+# NOTES_JWT_SECRET must be identical to the JWT_SECRET of the Numori Notes
+# deployment, because that API mints the capability tokens this service verifies.
+
+services:
+  crdt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Ask Coolify for a domain routed to container port 3030.
+      - SERVICE_FQDN_CRDT_3030
+
+      - CRDT_PORT=3030
+      - CRDT_HOST=0.0.0.0
+      - CRDT_LOG_LEVEL=${CRDT_LOG_LEVEL:-info}
+      - CRDT_STORAGE=postgres
+
+      # Points at the postgres service in this stack. Swap for an external
+      # DATABASE_URL if you would rather use a managed database.
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-crdt}
+      - POSTGRES_USER=${POSTGRES_USER:-crdt}
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+
+      # ── The app registry ────────────────────────────────────────────────
+      # One entry per application. Adding an app means adding an entry here plus
+      # its signing key below; existing apps are unaffected.
+      - >-
+        CRDT_APPS=[
+        {"id":"notes","secretEnv":"NOTES_JWT_SECRET","documentBinding":"open"}
+        ]
+      - NOTES_JWT_SECRET=${NOTES_JWT_SECRET:?}
+
+      # Enables POST /_admin/apps/:appId/revoke so the app can boot peers the
+      # instant a share changes. Remove to disable the admin API entirely.
+      - CRDT_ADMIN_SECRET=${SERVICE_PASSWORD_64_CRDTADMIN}
+
+      # Evict idle documents from memory after this long; they stay durable in
+      # Postgres and reload on next access.
+      - CRDT_IDLE_EVICT_MS=${CRDT_IDLE_EVICT_MS:-300000}
+      # Lower this if something between client and server closes idle sockets
+      # sooner than ~180s.
+      - CRDT_KEEPALIVE_MS=${CRDT_KEEPALIVE_MS:-5000}
+
+      # Coolify injects the generated domain here; the service logs the exact
+      # wss:// URL per app on startup so you can copy it straight into the app.
+      - CRDT_PUBLIC_URL=${SERVICE_FQDN_CRDT}
+    healthcheck:
+      # Liveness only — see the note above on why this is not /readyz.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3030/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-crdt}
+      - POSTGRES_USER=${POSTGRES_USER:-crdt}
+      # Coolify generates and stores this password, and reuses the same value
+      # wherever SERVICE_PASSWORD_POSTGRES is referenced.
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - crdt-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-crdt} -d ${POSTGRES_DB:-crdt}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  crdt-postgres-data:

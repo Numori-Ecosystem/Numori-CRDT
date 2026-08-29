@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { loadConfig, loadDatabaseConfig, ConfigError } from '../src/config.mjs'
+import { loadConfig, loadDatabaseConfig, clientUrlFor, ConfigError } from '../src/config.mjs'
 
 const SECRET = 'a-sufficiently-long-secret-value'
 
@@ -207,6 +207,58 @@ describe('database configuration', () => {
   it('relaxes certificate verification for sslmode=require', () => {
     const db = loadDatabaseConfig({ DATABASE_URL: 'postgres://u:p@h/d', PGSSLMODE: 'require' })
     expect(db.ssl).toEqual({ rejectUnauthorized: false })
+  })
+})
+
+describe('clientUrlFor', () => {
+  it('builds a wss url from a bare hostname', () => {
+    // Hosting platforms typically inject a bare FQDN, not an origin.
+    expect(clientUrlFor('crdt.example.com', 'notes')).toBe('wss://crdt.example.com/notes')
+  })
+
+  it('keeps an explicit https origin as wss', () => {
+    expect(clientUrlFor('https://crdt.example.com', 'notes')).toBe('wss://crdt.example.com/notes')
+  })
+
+  it('maps a plain http origin to ws', () => {
+    expect(clientUrlFor('http://localhost:3030', 'notes')).toBe('ws://localhost:3030/notes')
+  })
+
+  it('tolerates a trailing slash', () => {
+    expect(clientUrlFor('https://crdt.example.com/', 'todo')).toBe('wss://crdt.example.com/todo')
+  })
+
+  it('returns null when no public url is configured', () => {
+    expect(clientUrlFor(null, 'notes')).toBeNull()
+    expect(clientUrlFor('', 'notes')).toBeNull()
+  })
+})
+
+describe('proxy-related limits', () => {
+  it('defaults the keepalive well inside a typical proxy idle timeout', () => {
+    const config = loadConfig({ CRDT_APPS: JSON.stringify([{ id: 'notes', secret: SECRET }]) })
+    // Traefik and most CDNs close idle connections at 60-180s.
+    expect(config.keepAliveMs).toBe(5000)
+    expect(config.keepAliveMs).toBeLessThan(60_000)
+  })
+
+  it('allows tuning the keepalive for stricter proxies', () => {
+    const config = loadConfig({
+      CRDT_APPS: JSON.stringify([{ id: 'notes', secret: SECRET }]),
+      CRDT_KEEPALIVE_MS: '2000',
+    })
+    expect(config.keepAliveMs).toBe(2000)
+  })
+
+  it('rejects a keepalive outside the sane range', () => {
+    for (const value of ['0', '500', '999999']) {
+      expect(() =>
+        loadConfig({
+          CRDT_APPS: JSON.stringify([{ id: 'notes', secret: SECRET }]),
+          CRDT_KEEPALIVE_MS: value,
+        }),
+      ).toThrow(/CRDT_KEEPALIVE_MS/)
+    }
   })
 })
 

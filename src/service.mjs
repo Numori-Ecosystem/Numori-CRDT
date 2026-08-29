@@ -13,7 +13,7 @@ import { createRouter } from './router.mjs'
 import { createStorage } from './storage/index.mjs'
 import { createAuthenticator } from './auth/index.mjs'
 import { initDb, closeDb, isDbInitialized, ping } from './db.mjs'
-import { describeConfig } from './config.mjs'
+import { describeConfig, clientUrlFor } from './config.mjs'
 import { createLogger, setLogLevel } from './log.mjs'
 
 const log = createLogger('service')
@@ -52,6 +52,7 @@ export async function createService(config) {
       storage: createStorage(app, config),
       authenticate: createAuthenticator(app),
       maxPayloadBytes: config.maxPayloadBytes,
+      keepAliveMs: config.keepAliveMs,
     })
     tenants.set(app.id, tenant)
     log.info(
@@ -94,6 +95,17 @@ export async function createService(config) {
         ? `${address.address}:${address.port}`
         : `${config.host}:${config.port}`
     log.info(`listening on ${where}`)
+
+    // Print the exact URL each app's clients should use. Getting this wrong (or
+    // pointing at the wrong port behind a proxy) is the usual reason realtime
+    // traffic never arrives, so make it explicit rather than something to infer.
+    for (const app of config.apps) {
+      const url = clientUrlFor(config.publicUrl, app.id)
+      log.info(
+        `app "${app.id}" — clients connect to ${url ?? `ws://<host>:${config.port}/${app.id}`}`,
+      )
+    }
+
     return address
   }
 

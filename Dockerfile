@@ -30,10 +30,14 @@ USER crdt
 
 EXPOSE 3030
 
-# /readyz also verifies the database round-trip when one is configured, so an
-# instance that cannot persist documents is reported unhealthy.
+# Liveness, not readiness. Platforms that route on container health (Coolify and
+# other Traefik-fronted PaaS) will pull an "unhealthy" container out of the proxy
+# entirely — so probing /readyz here would turn a brief database hiccup into a
+# total collaboration outage, even though connected peers hold their own copy of
+# every document and would happily keep syncing. /readyz stays available for
+# orchestrators that distinguish readiness from liveness (e.g. Kubernetes).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.CRDT_PORT||3030)+'/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.CRDT_PORT||3030)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Run node directly (not via npm) so it receives SIGTERM as PID 1 and can shut
 # down gracefully, flushing documents before exit.

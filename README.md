@@ -287,7 +287,54 @@ room at all (for example by serving a static snapshot instead).
 docker compose up -d --build
 ```
 
-Behind a reverse proxy, forward WebSocket upgrades and preserve the path:
+### Coolify
+
+Use [`docker-compose.coolify.yml`](docker-compose.coolify.yml) as the compose file
+for a Coolify resource with build pack **Docker Compose**. In that mode the
+compose file is the single source of truth — environment variables, volumes and
+healthchecks are declared there, not in the UI.
+
+Set `NOTES_JWT_SECRET` (marked required, so Coolify blocks the deploy until it is
+filled in) to the same value as the Numori Notes deployment's `JWT_SECRET`.
+Everything else has a working default, and Coolify generates the Postgres password
+and admin credential itself.
+
+**Routing.** The file lists `SERVICE_FQDN_CRDT_3030`, which asks Coolify to
+generate a domain and route it to container port 3030 while serving the public
+side on 443. To use your own domain instead, drop that line and enter
+`http://crdt.example.com:3030` in the UI — the `:3030` tells Coolify which
+container port to forward to and does not appear in the public URL. There is
+deliberately no `ports:` mapping, since publishing a host port would bypass the
+proxy and TLS.
+
+On startup the service logs the exact URL for each app, e.g.
+`app "notes" — clients connect to wss://crdt-abc123.example.com/notes`. Copy that
+into the notes deployment as `NUXT_PUBLIC_COLLAB_WS_URL`.
+
+**WebSockets through Traefik.** Traefik proxies upgrades on the same router as
+ordinary HTTP, so no extra labels or configuration are required. Realtime traffic
+failing on a Traefik-fronted PaaS almost always comes down to one of three things:
+
+| Symptom                          | Cause                                                           |
+| -------------------------------- | --------------------------------------------------------------- |
+| Connection never arrives         | The domain points at the wrong container port                   |
+| `No Available Server`            | The container is unhealthy, so Traefik dropped it from the pool |
+| Sockets drop after a few minutes | Something on the path closes idle connections                   |
+
+The third is handled already: the service pings every `CRDT_KEEPALIVE_MS`
+(default 5s), well inside Traefik's 180s idle timeout. Lower it if you have a
+stricter proxy or CDN in front.
+
+The second is why the healthcheck probes `/healthz` (liveness) rather than
+`/readyz`. On a platform that routes on container health, a readiness probe that
+fails when the database hiccups would pull the service out of the proxy entirely
+and sever every live collaboration — even though each peer holds its own copy of
+the document and would otherwise just retry. `/readyz` remains available for
+orchestrators that treat readiness separately, such as Kubernetes.
+
+### Behind your own reverse proxy
+
+Forward WebSocket upgrades and preserve the path:
 
 ```nginx
 location /crdt/ {
