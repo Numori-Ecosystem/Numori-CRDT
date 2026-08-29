@@ -2,8 +2,7 @@
  * Numori CRDT — service assembly.
  *
  * Wires configuration into the running parts: database pool → per-app storage →
- * per-app authenticator → per-app tenant runtime → shared HTTP router →
- * optional revocation listeners.
+ * per-app authenticator → per-app tenant runtime → shared HTTP router.
  *
  * Kept separate from index.mjs (the CLI) so the whole service can be started
  * in-process by tests on an ephemeral port, with no environment mutation.
@@ -11,7 +10,7 @@
 import { createTenant } from './tenant.mjs'
 import { createRouter } from './router.mjs'
 import { createStorage } from './storage/index.mjs'
-import { createAuthenticator } from './auth/index.mjs'
+import { createAuthenticator, createRoomAuthorizer } from './auth/index.mjs'
 import { initDb, closeDb, isDbInitialized, ping } from './db.mjs'
 import { describeConfig, clientUrlFor } from './config.mjs'
 import { createLogger, setLogLevel } from './log.mjs'
@@ -27,8 +26,7 @@ const log = createLogger('service')
 export async function createService(config) {
   setLogLevel(config.logLevel)
 
-  const needsDb =
-    config.apps.some((a) => a.storage === 'postgres') || config.apps.some((a) => a.revokeChannel)
+  const needsDb = config.apps.some((a) => a.storage === 'postgres')
 
   if (needsDb) {
     if (!config.database) {
@@ -51,6 +49,7 @@ export async function createService(config) {
       app,
       storage: createStorage(app, config),
       authenticate: createAuthenticator(app),
+      authorizeRoom: createRoomAuthorizer(app),
       maxPayloadBytes: config.maxPayloadBytes,
       keepAliveMs: config.keepAliveMs,
     })
@@ -72,23 +71,7 @@ export async function createService(config) {
 
   const router = createRouter({ config, tenants })
 
-  let stopRevocation = null
-
   const start = async () => {
-    // Revocation listeners come up before the port opens, so a revocation issued
-    // during startup is not missed by an already-serving instance.
-    const wantsRevocation = config.apps.some((a) => a.revokeChannel)
-    if (wantsRevocation && isDbInitialized()) {
-      const { startRevocationListeners } = await import('./revocation/postgres.mjs')
-      stopRevocation = await startRevocationListeners({
-        apps: config.apps,
-        onRevoke: (appId, criteria) => {
-          const tenant = tenants.get(appId)
-          if (tenant) tenant.revoke(criteria)
-        },
-      })
-    }
-
     const address = await router.listen(config.port, config.host)
     const where =
       address && typeof address === 'object'
@@ -117,16 +100,13 @@ export async function createService(config) {
     //    connections. Awaiting it before draining them would deadlock.
     router.stopAccepting()
 
-    // 2. Stop revocation listeners so no work is scheduled during the drain.
-    if (stopRevocation) await stopRevocation().catch(() => {})
-
-    // 3. Drain each app: flush documents to storage, then close its sockets.
+    // 2. Drain each app: flush documents to storage, then close its sockets.
     await Promise.allSettled([...tenants.values()].map((t) => t.close()))
 
-    // 4. Now the listener can finish closing.
+    // 3. Now the listener can finish closing.
     await router.close()
 
-    // 5. Last, release the database that the flush in step 3 needed.
+    // 4. Last, release the database that the flush in step 2 needed.
     if (isDbInitialized()) await closeDb().catch(() => {})
     log.info('stopped')
   }

@@ -100,9 +100,18 @@ export function matchesRevocation(identity, criteria) {
  * @param {(req: import('node:http').IncomingMessage, url: URL) => Promise<{ok: boolean, reason: string, identity?: object}>} options.authenticate
  * @param {number} [options.maxPayloadBytes]
  * @param {number} [options.keepAliveMs] WebSocket ping interval
+ * @param {((identity: object, documentId: string) => Promise<boolean>)|null} [options.authorizeRoom]
+ *   Consulted when a peer names a document its grant does not cover.
  * @returns {object} tenant handle
  */
-export function createTenant({ app, storage, authenticate, maxPayloadBytes, keepAliveMs = 5000 }) {
+export function createTenant({
+  app,
+  storage,
+  authenticate,
+  maxPayloadBytes,
+  keepAliveMs = 5000,
+  authorizeRoom = null,
+}) {
   const log = createLogger(app.id)
 
   // noServer: the shared HTTP listener in router.mjs performs the upgrade and
@@ -128,7 +137,7 @@ export function createTenant({ app, storage, authenticate, maxPayloadBytes, keep
    */
   const identityOf = (peerId) => adapter.sockets?.[peerId]?._crdt ?? null
 
-  const isPermitted = (peerId, documentId) => {
+  const isPermitted = async (peerId, documentId) => {
     const identity = identityOf(peerId)
     if (!identity) {
       // No identity means either the peer has not completed the handshake or it
@@ -137,12 +146,22 @@ export function createTenant({ app, storage, authenticate, maxPayloadBytes, keep
     }
     // requireAuth:false servers carry no claims to check against.
     if (identity.unrestricted) return true
-    if (app.documentBinding === 'strict') {
-      return identity.documentIds instanceof Set && identity.documentIds.has(documentId)
-    }
-    // "open": document ids are unguessable capabilities revealed via share
-    // links, so an authenticated peer may sync any room it can name — within
-    // this app only, since another app's documents live in another Repo.
+
+    // Rooms the token (or the connect-time decision) already granted need no
+    // further check.
+    if (identity.documentIds instanceof Set && identity.documentIds.has(documentId)) return true
+
+    // Anything else is referred to the app when it offers an authorization
+    // endpoint. This is what stops a peer reaching a document its grant does not
+    // cover by naming it over an otherwise legitimate socket.
+    if (authorizeRoom) return authorizeRoom(identity, documentId)
+
+    if (app.documentBinding === 'strict') return false
+
+    // "open" with no authorization endpoint: document ids are unguessable
+    // capabilities revealed via share links, so an authenticated peer may sync
+    // any room it can name — within this app only, since another app's documents
+    // live in another Repo.
     return true
   }
 
@@ -155,7 +174,7 @@ export function createTenant({ app, storage, authenticate, maxPayloadBytes, keep
       // Never volunteer documents; see the header comment.
       announce: async () => false,
       access: async (peerId, documentId) => {
-        const allowed = isPermitted(peerId, documentId)
+        const allowed = await isPermitted(peerId, documentId)
         if (!allowed) {
           deniedCount++
           log.warn(`access denied: peer ${peerId} requested document ${documentId}`)

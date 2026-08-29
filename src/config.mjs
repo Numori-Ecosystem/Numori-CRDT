@@ -169,7 +169,6 @@ function singleAppFromEnv(env) {
     webhookSecret: env.CRDT_WEBHOOK_SECRET,
     webhookTimeoutMs: env.CRDT_WEBHOOK_TIMEOUT_MS,
     webhookFailOpen: env.CRDT_WEBHOOK_FAIL_OPEN,
-    revokeChannel: env.CRDT_REVOKE_CHANNEL,
     storage: env.CRDT_APP_STORAGE,
   }
 }
@@ -259,6 +258,20 @@ function normalizeApp(spec, env, defaults) {
         max: 30000,
         label: `app "${id}" webhookTimeoutMs`,
       }),
+      /**
+       * How long a per-room decision is trusted before the app is asked again.
+       *
+       * automerge-repo consults the access gate on *every* sync message, so
+       * decisions must be cached or a single editing session would generate
+       * thousands of requests. This only bounds how long a stale grant can
+       * linger for a document the peer keeps syncing; removing access outright
+       * is immediate via the admin revoke endpoint, which closes the socket.
+       */
+      cacheTtlMs: parseCount(spec.webhookCacheTtlMs, 60_000, {
+        min: 1000,
+        max: 3_600_000,
+        label: `app "${id}" webhookCacheTtlMs`,
+      }),
       // Default CLOSED: an authorization service that cannot be reached must
       // not silently grant access. Opt in to fail-open only if availability
       // matters more than the access check for that app.
@@ -269,20 +282,6 @@ function normalizeApp(spec, env, defaults) {
   const storage = String(spec.storage ?? defaults.storage).toLowerCase()
   if (!VALID_STORAGE.has(storage)) {
     throw new ConfigError(`app "${id}": storage must be "postgres" or "memory", got "${storage}"`)
-  }
-
-  const revokeChannel = spec.revokeChannel ? String(spec.revokeChannel).trim() : null
-  if (revokeChannel && storage !== 'postgres' && !defaults.hasDatabase) {
-    throw new ConfigError(
-      `app "${id}": revokeChannel needs a database connection; configure DATABASE_URL or POSTGRES_*`,
-    )
-  }
-  if (revokeChannel && !/^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/.test(revokeChannel)) {
-    // The channel name is interpolated into a LISTEN statement, which cannot be
-    // parameterized — so it must be a plain identifier.
-    throw new ConfigError(
-      `app "${id}": revokeChannel "${revokeChannel}" must be a simple identifier (letters, digits, underscore)`,
-    )
   }
 
   const adminSecret = resolveSecret(spec, env, {
@@ -296,7 +295,11 @@ function normalizeApp(spec, env, defaults) {
     name: spec.name ? String(spec.name) : id,
     requireAuth,
     jwtSecret,
-    /** Expected `purpose` claim. Kept configurable for wire-compat with existing issuers. */
+    /**
+     * Expected `purpose` claim, which guards against token confusion: a token an
+     * app minted for password reset or session auth must not also open a sync
+     * connection. Configurable per app because each app names its own purposes.
+     */
     tokenPurpose:
       spec.tokenPurpose === null ? null : String(spec.tokenPurpose ?? defaults.tokenPurpose),
     /**
@@ -309,7 +312,6 @@ function normalizeApp(spec, env, defaults) {
     authz,
     webhook,
     storage,
-    revokeChannel,
     adminSecret: adminSecret || null,
     idleEvictMs: parseCount(spec.idleEvictMs, defaults.idleEvictMs, {
       min: 0,
@@ -388,7 +390,6 @@ export function loadConfig(env = process.env) {
       max: 86_400_000,
       label: 'CRDT_IDLE_EVICT_MS',
     }),
-    hasDatabase: !!database,
   }
 
   const source = readAppsSource(env)
@@ -417,18 +418,6 @@ export function loadConfig(env = process.env) {
     )
   }
 
-  // A single-app deployment gets an implicit default, so a client may connect to
-  // any path — including one like "/collab" that names no app — and still be
-  // routed correctly. With several apps the path must name one, unless an
-  // explicit default is chosen.
-  const explicitDefault = env.CRDT_DEFAULT_APP?.trim() || null
-  if (explicitDefault && !seen.has(explicitDefault)) {
-    throw new ConfigError(
-      `CRDT_DEFAULT_APP="${explicitDefault}" is not a configured app (have: ${[...seen].join(', ')})`,
-    )
-  }
-  const defaultAppId = explicitDefault || (apps.length === 1 ? apps[0].id : null)
-
   const adminSecret = env.CRDT_ADMIN_SECRET?.trim() || null
   if (adminSecret && adminSecret.length < 16) {
     throw new ConfigError('CRDT_ADMIN_SECRET must be at least 16 characters')
@@ -455,7 +444,6 @@ export function loadConfig(env = process.env) {
       secret: adminSecret,
     }),
     apps: Object.freeze(apps),
-    defaultAppId,
     /** Max WebSocket message size; guards against a peer exhausting memory. */
     maxPayloadBytes: parseCount(env.CRDT_MAX_PAYLOAD_BYTES, 100 * 1024 * 1024, {
       min: 1024,
@@ -510,14 +498,12 @@ export function describeConfig(config) {
     storage: config.storage,
     database: config.database ? 'configured' : 'none',
     adminApi: config.admin.enabled ? 'enabled' : 'disabled',
-    defaultApp: config.defaultAppId ?? '(none — path must name an app)',
     apps: config.apps.map((a) => ({
       id: a.id,
       requireAuth: a.requireAuth,
       documentBinding: a.documentBinding,
       authz: a.authz,
       storage: a.storage,
-      revokeChannel: a.revokeChannel ?? null,
       idleEvictMs: a.idleEvictMs,
     })),
   }

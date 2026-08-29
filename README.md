@@ -100,10 +100,12 @@ wss://crdt.example.com/notes?token=…   → the notes app
 wss://crdt.example.com/todo?token=…    → the todo app
 ```
 
-If the path does not name a configured app, the request falls back to the default
-app — implicit when only one app is configured, otherwise set by
-`CRDT_DEFAULT_APP`. That fallback is what lets an existing client which connects
-to `/collab` keep working while pointed at this service.
+Clients that cannot control the path may name the app with an `app` query
+parameter instead.
+
+A request naming no configured app is refused with `404`, listing the app ids that
+are configured. There is no default: silently routing an unrecognised name
+somewhere would turn a typo into documents landing in the wrong app's store.
 
 Configuration is validated at startup and a mistake exits with code `78`
 (`EX_CONFIG`) and a plain-language message, rather than failing later on the
@@ -167,7 +169,7 @@ answer with them from the webhook). Use `open` otherwise.
 
 A token proves permission was granted _once_. It cannot express what changed
 since — a share revoked, a collaborator removed, a link expired. Set
-`authz: "webhook"` and this service asks your app on every connection:
+`authz: "webhook"` and this service asks your app instead of assuming:
 
 ```http
 POST /api/collab/authorize
@@ -175,7 +177,7 @@ x-numori-crdt-app: notes
 x-numori-crdt-timestamp: 1767225600
 x-numori-crdt-signature: sha256=<hmac>
 
-{"appId":"notes","documentId":"3Ux1s9…","userId":42,"kind":"user","access":"write", …}
+{"appId":"notes","check":"connection","documentId":"3Ux1s9…","userId":42,"kind":"user", …}
 ```
 
 Answer `200` with:
@@ -192,7 +194,35 @@ Returning `documentIds` is how an app using `strict` binding hands over a
 session's complete room list — it knows the membership, the token only carried the
 entry point.
 
-Verify the signature before trusting the request:
+### `check: "connection"` vs `check: "room"`
+
+The endpoint answers two different questions, distinguished by the `check` field.
+
+`connection` is a peer establishing a socket, carrying the document its token
+names.
+
+`room` is an already-connected peer reaching for a document its grant does not
+cover, and it exists to close a real hole. A single socket can name any number of
+documents, so a collaborator removed from document A could reconnect with a
+still-valid token for document B and then ask for A across that socket — closing
+their socket does not prevent it, because the next connection is legitimately
+authorized, just not for A. Checking the document, rather than only the
+connection, is what stops that.
+
+Decisions are cached per connection per document for `webhookCacheTtlMs`
+(default 60s), positive and negative alike. That caching is not an optional
+optimization: automerge-repo consults its access gate on **every** sync message,
+so uncached checks would mean thousands of requests per editing session. The TTL
+bounds only how long a stale grant can linger for a document the peer keeps
+syncing — removing access outright is immediate via the
+[admin revoke endpoint](#revoking-access), which closes the socket.
+
+Rooms already covered by a grant are never re-checked, so the common case costs
+no requests at all.
+
+### Verifying the signature
+
+Verify before trusting the request:
 
 ```js
 const expected =
@@ -228,12 +258,7 @@ Omit `userId`/`sid`/`kind` to boot everyone in the room. The endpoint does not
 exist unless `CRDT_ADMIN_SECRET` or a per-app `adminSecret` is configured, and it
 authenticates before revealing whether an app exists.
 
-**Postgres `NOTIFY`** (for apps already sharing this database) — set
-`revokeChannel` on the app and signal inside the same transaction as the change:
-
-```sql
-SELECT pg_notify('collab_revoke', '{"documentId":"3Ux1s9…","userId":42}');
-```
+Call it from the same code path that changes the share, so the two cannot drift.
 
 ---
 
@@ -357,26 +382,6 @@ Bounded by `CRDT_SHUTDOWN_GRACE_MS` (default 10s).
 
 ---
 
-## Importing documents from another table
-
-To adopt Automerge chunks that live in a single-tenant table — one keyed only by
-`key`, with no `app_id` column — copy them into `crdt_chunks` under an app id:
-
-```bash
-# Report what would be copied and change nothing.
-node scripts/import-documents.mjs --app notes --from collab_chunks --dry-run
-
-node scripts/import-documents.mjs --app notes --from collab_chunks
-```
-
-`--from` defaults to `collab_chunks` and `--to` to `crdt_chunks`. The copy is
-additive, idempotent and never writes to the source table, so it is safe to run
-more than once and safe to leave the source in place until you have confirmed the
-service serves those documents. Add `--overwrite` to replace rows that already
-exist for the app.
-
----
-
 ## Architecture
 
 ```
@@ -393,8 +398,6 @@ src/
     webhook.mjs          the per-app authorization callback
   storage/
     postgres.mjs         tenant-scoped Automerge storage adapter
-  revocation/
-    postgres.mjs         optional LISTEN/NOTIFY bridge
   documentId.mjs         document id normalization
   db.mjs                 shared connection pool
   log.mjs                levelled logger
@@ -423,9 +426,8 @@ in-process on an ephemeral port by the tests, with no environment mutation.
   rather than trusted.
 - Signature comparison is constant-time; admin credentials are compared as
   hashes so the comparison leaks nothing about their length.
-- Table and NOTIFY channel names are interpolated into SQL (they cannot be
-  parameterized) and are validated as plain identifiers before use. All values
-  are parameterized.
+- The chunk table name is interpolated into SQL (it cannot be parameterized) and
+  is validated as a plain identifier before use. All values are parameterized.
 - `npm audit` reports advisories against `uuid` reached through
   `@automerge/automerge-repo`. No fix is published upstream; the affected code
   path is `uuid` v3/v5/v6 with a caller-supplied buffer, which automerge-repo

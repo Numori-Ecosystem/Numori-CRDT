@@ -126,17 +126,6 @@ describe('app registry validation', () => {
     expect(config.apps[0].webhook.failOpen).toBe(false)
   })
 
-  it('rejects a revocation channel that is not a plain identifier', () => {
-    expect(() =>
-      loadConfig({
-        CRDT_APPS: JSON.stringify([
-          { id: 'notes', secret: SECRET, revokeChannel: 'bad; DROP TABLE x' },
-        ]),
-        DATABASE_URL: 'postgres://user:pw@localhost:5432/db',
-      }),
-    ).toThrow(/simple identifier/)
-  })
-
   it('rejects postgres storage without a database', () => {
     expect(() =>
       loadConfig({
@@ -144,43 +133,6 @@ describe('app registry validation', () => {
         CRDT_APPS: JSON.stringify([{ id: 'notes', secret: SECRET }]),
       }),
     ).toThrow(/no database is configured/)
-  })
-})
-
-describe('default app resolution', () => {
-  it('makes a lone app the implicit default so any path routes to it', () => {
-    const config = loadConfig({ CRDT_APPS: JSON.stringify([{ id: 'notes', secret: SECRET }]) })
-    expect(config.defaultAppId).toBe('notes')
-  })
-
-  it('has no implicit default once several apps are hosted', () => {
-    const config = loadConfig({
-      CRDT_APPS: JSON.stringify([
-        { id: 'notes', secret: SECRET },
-        { id: 'todo', secret: SECRET },
-      ]),
-    })
-    expect(config.defaultAppId).toBeNull()
-  })
-
-  it('honours an explicit default', () => {
-    const config = loadConfig({
-      CRDT_APPS: JSON.stringify([
-        { id: 'notes', secret: SECRET },
-        { id: 'todo', secret: SECRET },
-      ]),
-      CRDT_DEFAULT_APP: 'todo',
-    })
-    expect(config.defaultAppId).toBe('todo')
-  })
-
-  it('rejects a default naming an app that does not exist', () => {
-    expect(() =>
-      loadConfig({
-        CRDT_APPS: JSON.stringify([{ id: 'notes', secret: SECRET }]),
-        CRDT_DEFAULT_APP: 'ghost',
-      }),
-    ).toThrow(/not a configured app/)
   })
 })
 

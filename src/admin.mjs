@@ -9,12 +9,12 @@
  * a collaborator, deletes a share or makes a document private, the peers already
  * connected must be disconnected now rather than at token expiry.
  *
- * An authenticated HTTP call is the primary mechanism because it works wherever
- * the app is hosted. Signalling through a shared Postgres NOTIFY channel is also
- * supported (see src/revocation/postgres.mjs) and has the advantage of being
- * transactional with the change that triggered it — but it requires the app to
- * live in the same database as this service, which cannot be assumed once
- * several unrelated apps are hosted.
+ * An authenticated HTTP call is the mechanism because it works wherever the app
+ * is hosted. Signalling through the database instead would be transactional with
+ * the change that triggered it, but it would require every app to share a
+ * database with this service — a coupling that cannot hold once several unrelated
+ * apps are hosted, and one that would give the sync service access to application
+ * tables it has no business reading.
  *
  * ═══════════════════════════════════════════════════════════════════════════
  * ENDPOINTS

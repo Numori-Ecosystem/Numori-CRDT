@@ -97,7 +97,6 @@ describe('admin API', () => {
         { id: 'notes', secret: TEST_SECRET },
         { id: 'todo', secret: TEST_SECRET },
       ]),
-      CRDT_DEFAULT_APP: 'notes',
       CRDT_ADMIN_SECRET: ADMIN_SECRET,
     })
   })

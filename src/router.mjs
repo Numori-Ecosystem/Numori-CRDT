@@ -10,10 +10,10 @@
  *   wss://crdt.example.com/notes?token=…   → the "notes" app
  *   wss://crdt.example.com/todo?token=…    → the "todo" app
  *
- * If the first segment does not match a configured app, the request falls back
- * to the default app (a single-app deployment gets one implicitly, otherwise set
- * CRDT_DEFAULT_APP). That fallback is what lets an existing client which
- * connects to `/collab` keep working unchanged while pointing at this service.
+ * A request that names no configured app is refused. There is deliberately no
+ * default: silently routing an unrecognised name to some app would turn a typo
+ * into documents landing in the wrong store, which is the one failure this
+ * service exists to make impossible.
  *
  * Routing by path rather than subdomain keeps TLS and reverse-proxy config to a
  * single hostname, and the same URL shape works behind a path-routed proxy.
@@ -71,23 +71,23 @@ function parseUrl(req) {
 /**
  * Resolve which app a request addresses.
  *
- * @returns {{tenant: object|null, appId: string|null, viaDefault: boolean}}
+ * A request must name its app, either as the first path segment or with an `app`
+ * query parameter (for clients that cannot control the path). There is no
+ * fallback: routing an unrecognised name somewhere by default would turn a typo
+ * into documents quietly landing in the wrong app's store.
+ *
+ * @returns {{tenant: object|null, appId: string|null}}
  */
-function resolveTenant(url, tenants, defaultAppId) {
+function resolveTenant(url, tenants) {
   const first = url.pathname.split('/').filter(Boolean)[0]
   if (first && tenants.has(first)) {
-    return { tenant: tenants.get(first), appId: first, viaDefault: false }
+    return { tenant: tenants.get(first), appId: first }
   }
-  // Allow the app to be named by query parameter too, for clients that cannot
-  // control the path (some embedded WebSocket libraries).
   const fromQuery = url.searchParams.get('app')
   if (fromQuery && tenants.has(fromQuery)) {
-    return { tenant: tenants.get(fromQuery), appId: fromQuery, viaDefault: false }
+    return { tenant: tenants.get(fromQuery), appId: fromQuery }
   }
-  if (defaultAppId && tenants.has(defaultAppId)) {
-    return { tenant: tenants.get(defaultAppId), appId: defaultAppId, viaDefault: true }
-  }
-  return { tenant: null, appId: first ?? null, viaDefault: false }
+  return { tenant: null, appId: first ?? fromQuery ?? null }
 }
 
 async function checkDatabase() {
@@ -180,9 +180,12 @@ export function createRouter({ config, tenants }) {
       return
     }
 
-    const { tenant, appId, viaDefault } = resolveTenant(url, tenants, config.defaultAppId)
+    const { tenant, appId } = resolveTenant(url, tenants)
     if (!tenant) {
-      log.warn(`upgrade rejected: no app for path "${url.pathname}"`)
+      log.warn(
+        `upgrade rejected: path "${url.pathname}" names no configured app` +
+          (appId ? ` (got "${appId}")` : ''),
+      )
       socket.write(
         'HTTP/1.1 404 Not Found\r\n' +
           'Content-Type: text/plain\r\n' +
@@ -199,7 +202,7 @@ export function createRouter({ config, tenants }) {
     // unhandled 'error' event and crash the process.
     socket.on('error', (err) => log.debug('upgrade socket error:', err?.message))
 
-    log.debug(`upgrade for app "${appId}"${viaDefault ? ' (via default)' : ''}: ${url.pathname}`)
+    log.debug(`upgrade for app "${appId}": ${url.pathname}`)
     tenant.handleUpgrade(req, socket, head, url).catch((err) => {
       log.error(`upgrade failed for app "${appId}":`, err?.message)
       try {

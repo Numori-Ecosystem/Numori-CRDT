@@ -60,15 +60,22 @@ export function signPayload(body, timestamp, secret) {
  * Build an authorizer that asks the app's endpoint for a decision.
  *
  * @param {object} app normalized app config (must have app.webhook)
- * @returns {(identity: object) => Promise<{allow: boolean, reason: string, documentIds?: string[], access?: string}>}
+ * @returns {(identity: object, options?: {check?: string, documentId?: string}) => Promise<{allow: boolean, reason: string, documentIds?: string[], access?: string}>}
  */
 export function createWebhookAuthorizer(app) {
   const { url, secret, timeoutMs, failOpen } = app.webhook
 
-  return async function authorize(identity) {
+  return async function authorize(identity, options = {}) {
+    // `check` tells the app why it is being asked: "connection" when a peer is
+    // establishing a socket, "room" when an already-connected peer reaches for a
+    // document its token did not name.
+    const check = options.check ?? 'connection'
+    const documentId = options.documentId ?? identity.documentId ?? null
+
     const payload = {
       appId: app.id,
-      documentId: identity.documentId ?? null,
+      check,
+      documentId,
       documentIds: identity.documentIds ?? [],
       userId: identity.userId ?? null,
       sid: identity.sid ?? null,

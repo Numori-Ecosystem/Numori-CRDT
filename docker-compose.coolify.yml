@@ -73,11 +73,18 @@ services:
       # ── The app registry ────────────────────────────────────────────────
       # One entry per application. Adding an app means adding an entry here plus
       # its signing key below; existing apps are unaffected.
+      #
+      # `authz: webhook` makes the app the authority on who may join a document,
+      # so this service never reads its tables. Drop those three fields to run on
+      # capability tokens alone.
       - >-
         CRDT_APPS=[
-        {"id":"notes","secretEnv":"NOTES_JWT_SECRET","documentBinding":"open"}
+        {"id":"notes","secretEnv":"NOTES_JWT_SECRET","documentBinding":"open",
+        "authz":"webhook","webhookUrl":"${NOTES_AUTHORIZE_URL:-}",
+        "webhookSecretEnv":"NOTES_WEBHOOK_SECRET"}
         ]
       - NOTES_JWT_SECRET=${NOTES_JWT_SECRET:?}
+      - NOTES_WEBHOOK_SECRET=${NOTES_WEBHOOK_SECRET:?}
 
       # Enables POST /_admin/apps/:appId/revoke so the app can boot peers the
       # instant a share changes. Remove to disable the admin API entirely.

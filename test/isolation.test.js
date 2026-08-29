@@ -137,13 +137,13 @@ describe('audience binding', () => {
   })
 })
 
-describe('default app fallback', () => {
+describe('a request must name its app', () => {
   let svc
   const clients = createClientPool()
 
   beforeAll(async () => {
-    // A single app becomes the implicit default, which is what lets an existing
-    // client that connects to "/collab" keep working unchanged.
+    // Deliberately a single-app service: even then there is no default, because
+    // an unrecognised name must never be routed somewhere by guesswork.
     svc = await startService({
       CRDT_APPS: JSON.stringify([{ id: 'notes', secret: TEST_SECRET }]),
     })
@@ -154,17 +154,35 @@ describe('default app fallback', () => {
     await svc.stop()
   })
 
-  it('serves a path that names no app through the default app', async () => {
+  it('serves the app named by the first path segment', async () => {
     const token = mintToken({ secret: TEST_SECRET })
-    const { repo } = clients.connect(svc.ws(`/collab?token=${token}`))
-    const handle = repo.create({ text: 'unmatched path' })
+    const { repo } = clients.connect(svc.ws(`/notes?token=${token}`))
+    const handle = repo.create({ text: 'named path' })
     expect(
-      await waitFor(() => servedText(svc.tenant('notes'), handle.documentId) === 'unmatched path'),
+      await waitFor(() => servedText(svc.tenant('notes'), handle.documentId) === 'named path'),
     ).toBe(true)
   })
 
-  it('also accepts the app named by query parameter', async () => {
+  it('accepts the app named by query parameter', async () => {
     const token = mintToken({ secret: TEST_SECRET })
     expect(await openRawSocket(svc.ws(`/?app=notes&token=${token}`))).toEqual({ opened: true })
+  })
+
+  it('refuses a path that names no app, even with only one app hosted', async () => {
+    const token = mintToken({ secret: TEST_SECRET })
+    const result = await openRawSocket(svc.ws(`/collab?token=${token}`))
+    expect(result.opened).toBe(false)
+    expect(result.status).toBe(404)
+  })
+
+  it('refuses the bare root path', async () => {
+    const token = mintToken({ secret: TEST_SECRET })
+    expect((await openRawSocket(svc.ws(`/?token=${token}`))).status).toBe(404)
+  })
+
+  it('refuses a misspelled app name rather than guessing', async () => {
+    const token = mintToken({ secret: TEST_SECRET })
+    expect((await openRawSocket(svc.ws(`/note?token=${token}`))).status).toBe(404)
+    expect((await openRawSocket(svc.ws(`/Notes?token=${token}`))).status).toBe(404)
   })
 })

@@ -26,8 +26,6 @@ services:
       # The app registry. Each app has its own signing key, referenced
       # indirectly through secretEnv so no key material lives in this file.
       #
-      # `revokeChannel` is optional and only useful when the app shares this
-      # database; otherwise use the admin API to revoke access.
       CRDT_APPS: >-
         [
           {"id":"notes","secretEnv":"NOTES_JWT_SECRET","documentBinding":"open"},

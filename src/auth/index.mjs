@@ -201,6 +201,89 @@ export function createAuthenticator(app) {
   }
 }
 
+/**
+ * Build the per-room authorizer, or null when the app has no webhook.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHY THIS IS SEPARATE FROM CONNECTION AUTH
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Authorizing only at connect time leaves a gap. A peer holds one socket but may
+ * name any number of documents over it, so a collaborator removed from document
+ * A can reconnect with a still-valid token for document B and then ask for A
+ * across that socket. Closing their socket (admin revoke) does not prevent it,
+ * because the next connection is legitimately authorized — just not for A.
+ *
+ * Closing the gap means checking the document, not only the connection. Rooms
+ * the token or the connect-time decision already granted are allowed outright;
+ * anything else is referred to the app.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * WHY IT CACHES
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * automerge-repo consults the access gate on *every* sync message, so an
+ * uncached check would issue a request per keystroke batch. Decisions are cached
+ * per connection per document, positive and negative alike — negative too,
+ * because a denied client typically retries hard and would otherwise hammer the
+ * app's endpoint.
+ *
+ * The cache is keyed by the identity object, which lives and dies with its
+ * socket, so entries are collected when the peer disconnects and one peer's
+ * decisions can never be read for another.
+ *
+ * @param {object} app normalized app config
+ * @returns {((identity: object, documentId: string) => Promise<boolean>)|null}
+ */
+export function createRoomAuthorizer(app) {
+  if (app.authz !== 'webhook') return null
+
+  const authorize = createWebhookAuthorizer(app)
+  const ttl = app.webhook.cacheTtlMs
+  /** @type {WeakMap<object, Map<string, {allow: boolean, expiresAt: number, pending?: Promise<boolean>}>>} */
+  const cache = new WeakMap()
+
+  return async function authorizeRoom(identity, documentId) {
+    let perIdentity = cache.get(identity)
+    if (!perIdentity) {
+      perIdentity = new Map()
+      cache.set(identity, perIdentity)
+    }
+
+    const now = Date.now()
+    const hit = perIdentity.get(documentId)
+    // Coalesce concurrent checks: sync messages arrive in bursts, and all of them
+    // should share one in-flight request rather than each starting its own.
+    if (hit?.pending) return hit.pending
+    if (hit && hit.expiresAt > now) return hit.allow
+
+    const pending = (async () => {
+      const decision = await authorize(identity, { check: 'room', documentId })
+      const allow = decision.allow === true
+      perIdentity.set(documentId, { allow, expiresAt: Date.now() + ttl })
+      if (!allow) {
+        log.warn(
+          `app "${app.id}": room ${documentId} denied for`,
+          identity.userId != null ? `user=${identity.userId}` : `sid=${identity.sid}`,
+          `- ${decision.reason}`,
+        )
+      }
+      return allow
+    })()
+
+    perIdentity.set(documentId, { allow: false, expiresAt: 0, pending })
+    try {
+      return await pending
+    } catch (err) {
+      // A throw here is a bug rather than a denial, but it must not be cached as
+      // an allow. Drop the entry so the next message retries.
+      perIdentity.delete(documentId)
+      log.error(`app "${app.id}": room check threw:`, err?.message)
+      return false
+    }
+  }
+}
+
 /** Secret-free description of an app's auth posture, for logs and /healthz. */
 export function describeAuth(app) {
   return {
@@ -210,7 +293,12 @@ export function describeAuth(app) {
     tokenPurpose: app.tokenPurpose,
     audience: app.audience,
     webhook: app.webhook
-      ? { url: app.webhook.url, signed: !!app.webhook.secret, failOpen: app.webhook.failOpen }
+      ? {
+          url: app.webhook.url,
+          signed: !!app.webhook.secret,
+          failOpen: app.webhook.failOpen,
+          cacheTtlMs: app.webhook.cacheTtlMs,
+        }
       : null,
   }
 }

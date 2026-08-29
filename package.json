@@ -34,7 +34,6 @@
     "dev": "CRDT_LOG_LEVEL=debug node --watch src/index.mjs",
     "dev:db": "docker compose -f docker-compose.dev.yml up -d",
     "dev:db:stop": "docker compose -f docker-compose.dev.yml down",
-    "import:documents": "node scripts/import-documents.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . --max-warnings 0",
